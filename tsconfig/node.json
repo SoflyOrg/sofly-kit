@@ -1,0 +1,18 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"display": "@sofly/kit node (NestJS / Drizzle)",
+	"extends": "./base.json",
+	"compilerOptions": {
+		"module": "commonjs",
+		"moduleResolution": "node",
+		"target": "ES2022",
+		"lib": ["ES2023"],
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+		"verbatimModuleSyntax": false,
+		"isolatedModules": false,
+		"esModuleInterop": true,
+		"sourceMap": true,
+		"outDir": "dist"
+	}
+}

@@ -1,0 +1,13 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"display": "@sofly/kit react library (packages/ui)",
+	"extends": "./base.json",
+	"compilerOptions": {
+		"lib": ["DOM", "DOM.Iterable", "ES2023"],
+		"jsx": "react-jsx",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"verbatimModuleSyntax": false,
+		"noEmit": true
+	}
+}

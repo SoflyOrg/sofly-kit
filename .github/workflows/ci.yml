@@ -1,0 +1,235 @@
+# CI de SOFLY para monorepos pnpm + turbo. Lo llama el `ci.yml` de cada sistema:
+#
+#   jobs:
+#     ci:
+#       uses: SoflyOrg/sofly-kit/.github/workflows/ci.yml@v1
+#       with: { ... }
+#
+# Corre `verify` (format, lint, typecheck, test, build) y, si se pide, `e2e`.
+# Lo propio de cada sistema entra por inputs: runner, base de datos, env,
+# migraciones, chequeos extra y los pasos de E2E.
+#
+# El `on:` (con sus `paths-ignore`) queda en el repo que llama: GitHub no deja
+# heredarlo. La concurrencia vive acá; el que llama NO debe declarar la suya
+# con el mismo grupo (se trabarían).
+name: CI (sofly-kit)
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Runner en JSON: "ubuntu-latest" o ["self-hosted","sofly-vps"].'
+        type: string
+        default: '"ubuntu-latest"'
+      database:
+        description: Levanta Postgres 16 y Redis 7 como servicios.
+        type: boolean
+        default: false
+      db-user:
+        type: string
+        default: app
+      db-password:
+        type: string
+        default: app
+      db-name:
+        type: string
+        default: app
+      env:
+        description: Variables (objeto JSON) para los dos jobs.
+        type: string
+        default: '{}'
+      migrate:
+        description: Comando de migraciones, antes del lint y los tests. Vacío = no hay.
+        type: string
+        default: ''
+      extra-checks:
+        description: Script extra después del format check (por ejemplo, versiones fijadas).
+        type: string
+        default: ''
+      audit:
+        description: Corre `pnpm audit --audit-level high` (informativo, no corta).
+        type: boolean
+        default: false
+      turbo-cache:
+        description: Caché de turbo fuera del checkout (sólo sirve en el runner self-hosted).
+        type: boolean
+        default: false
+      e2e:
+        description: Corre el job de E2E después de `verify`.
+        type: boolean
+        default: false
+      e2e-env:
+        description: Variables extra (objeto JSON) sólo para E2E.
+        type: string
+        default: '{}'
+      e2e-setup:
+        description: Script de preparación de E2E (base de test, migraciones, build, navegador).
+        type: string
+        default: ''
+      e2e-command:
+        description: Script que corre los E2E.
+        type: string
+        default: ''
+      e2e-report:
+        description: Carpeta del reporte de Playwright a subir como artifact.
+        type: string
+        default: playwright-report
+
+# En una PR, un push nuevo cancela la corrida vieja. En main no: cortar un CI a
+# la mitad lo hace empezar de cero y demora el deploy.
+concurrency:
+  group: ci-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Lint, typecheck, test, build
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+
+    # Con `database: false` la imagen queda vacía y el servicio no arranca.
+    services:
+      postgres:
+        image: ${{ inputs.database && 'postgres:16-alpine' || '' }}
+        env:
+          POSTGRES_USER: ${{ inputs.db-user }}
+          POSTGRES_PASSWORD: ${{ inputs.db-password }}
+          POSTGRES_DB: ${{ inputs.db-name }}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ${{ inputs.db-user }}"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: ${{ inputs.database && 'redis:7-alpine' || '' }}
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Sin `version`: la toma de `packageManager` del package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Variables del sistema
+        env:
+          KIT_ENV: ${{ inputs.env }}
+          KIT_TURBO_CACHE: ${{ inputs.turbo-cache }}
+        run: |
+          node -e '
+            const env = JSON.parse(process.env.KIT_ENV || "{}")
+            if (process.env.KIT_TURBO_CACHE === "true") {
+              env.TURBO_CACHE_DIR = require("node:path").resolve(process.env.GITHUB_WORKSPACE, "..", ".turbo-cache")
+            }
+            const lines = Object.entries(env).map(([k, v]) => k + "=" + v)
+            require("node:fs").appendFileSync(process.env.GITHUB_ENV, lines.join("\n") + "\n")
+          '
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run database migrations
+        if: ${{ inputs.migrate != '' }}
+        run: ${{ inputs.migrate }}
+
+      - name: Check formatting
+        run: pnpm -w format:check
+
+      - name: Chequeos propios del sistema
+        if: ${{ inputs.extra-checks != '' }}
+        run: ${{ inputs.extra-checks }}
+
+      - name: Lint
+        run: pnpm -w lint
+
+      - name: Typecheck
+        run: pnpm -w typecheck
+
+      - name: Test
+        run: pnpm -w test
+
+      - name: Build
+        run: pnpm -w build
+
+      - name: Audit dependencies
+        if: ${{ inputs.audit }}
+        run: pnpm audit --audit-level high || true
+
+      # La caché de turbo no tiene tope propio: se borra lo que no se usó en una
+      # semana para que no crezca sin fin en el disco del VPS.
+      - name: Limpiar caché de turbo vieja
+        if: ${{ inputs.turbo-cache }}
+        run: find "$TURBO_CACHE_DIR" -type f -mtime +7 -delete 2>/dev/null || true
+
+  e2e:
+    name: E2E (Playwright)
+    if: ${{ inputs.e2e }}
+    needs: verify
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+
+    services:
+      postgres:
+        image: ${{ inputs.database && 'postgres:16-alpine' || '' }}
+        env:
+          POSTGRES_USER: ${{ inputs.db-user }}
+          POSTGRES_PASSWORD: ${{ inputs.db-password }}
+          POSTGRES_DB: ${{ inputs.db-name }}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ${{ inputs.db-user }}"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: ${{ inputs.database && 'redis:7-alpine' || '' }}
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Variables del sistema
+        env:
+          KIT_ENV: ${{ inputs.env }}
+          KIT_E2E_ENV: ${{ inputs.e2e-env }}
+          KIT_TURBO_CACHE: ${{ inputs.turbo-cache }}
+        run: |
+          node -e '
+            const env = { ...JSON.parse(process.env.KIT_ENV || "{}"), ...JSON.parse(process.env.KIT_E2E_ENV || "{}"), CI: "true" }
+            if (process.env.KIT_TURBO_CACHE === "true") {
+              env.TURBO_CACHE_DIR = require("node:path").resolve(process.env.GITHUB_WORKSPACE, "..", ".turbo-cache")
+            }
+            const lines = Object.entries(env).map(([k, v]) => k + "=" + v)
+            require("node:fs").appendFileSync(process.env.GITHUB_ENV, lines.join("\n") + "\n")
+          '
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Preparar E2E
+        if: ${{ inputs.e2e-setup != '' }}
+        run: ${{ inputs.e2e-setup }}
+
+      - name: Run E2E tests
+        run: ${{ inputs.e2e-command }}
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: ${{ inputs.e2e-report }}
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,66 @@
+# Deploy de SOFLY a un VPS por SSH: `git pull --ff-only` + el script de deploy
+# del sistema (el build de las imágenes corre en el VPS). Lo llama el
+# `deploy.yml` de cada sistema cuando su CI terminó en verde en main:
+#
+#   on:
+#     workflow_run: { workflows: [CI], types: [completed], branches: [main] }
+#   jobs:
+#     deploy:
+#       if: ${{ github.event.workflow_run.conclusion == 'success' }}
+#       uses: SoflyOrg/sofly-kit/.github/workflows/deploy-vps.yml@v1
+#       with: { path: ~/reina-reech }
+#       secrets:
+#         VPS_HOST: ${{ secrets.VPS_HOST }}
+#         VPS_USER: ${{ secrets.VPS_USER }}
+#         VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+#
+# Los secrets van explícitos: `secrets: inherit` no cruza de organización y
+# varios sistemas viven en cuentas personales.
+name: Deploy VPS (sofly-kit)
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Carpeta del repo en el VPS (por ejemplo, ~/reina-reech).
+        type: string
+        required: true
+      command:
+        description: Lo que corre después del pull.
+        type: string
+        default: bash scripts/deploy.sh
+      timeout:
+        description: Un build sin caché (después del prune semanal) pasa los 30 minutos.
+        type: string
+        default: 60m
+    secrets:
+      VPS_HOST:
+        required: true
+      VPS_USER:
+        required: true
+      VPS_SSH_KEY:
+        required: true
+
+# Un deploy a la vez y sin cortar el que está corriendo: un build cortado a la
+# mitad deja imágenes a medio hacer.
+concurrency:
+  group: deploy-prod-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: ${{ inputs.timeout }}
+          script: |
+            set -e
+            cd ${{ inputs.path }}
+            git pull --ff-only
+            ${{ inputs.command }}

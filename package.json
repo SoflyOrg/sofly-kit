@@ -1,0 +1,40 @@
+{
+	"name": "@sofly/kit",
+	"version": "1.0.0",
+	"description": "Configs y workflows compartidos de los sistemas de SOFLY (eslint, prettier, tsconfig, commitlint, lint-staged, CI y deploy).",
+	"license": "MIT",
+	"type": "module",
+	"exports": {
+		"./eslint": "./eslint/index.js",
+		"./prettier": "./prettier.js",
+		"./commitlint": "./commitlint.js",
+		"./lint-staged": "./lint-staged.js",
+		"./tsconfig/*": "./tsconfig/*",
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"eslint",
+		"tsconfig",
+		"prettier.js",
+		"commitlint.js",
+		"lint-staged.js"
+	],
+	"dependencies": {
+		"@commitlint/config-conventional": "^19.8.1",
+		"@eslint/js": "^9.39.0",
+		"@next/eslint-plugin-next": "^15.5.0",
+		"eslint-config-prettier": "^9.1.2",
+		"eslint-plugin-import": "^2.31.0",
+		"eslint-plugin-react": "^7.37.3",
+		"eslint-plugin-react-hooks": "^5.2.0",
+		"eslint-plugin-simple-import-sort": "^12.1.1",
+		"globals": "^15.15.0",
+		"prettier-plugin-tailwindcss": "^0.6.14",
+		"typescript-eslint": "^8.60.0"
+	},
+	"peerDependencies": {
+		"eslint": "^9.17.0",
+		"prettier": "^3.4.2",
+		"typescript": "^5.7.2"
+	}
+}
