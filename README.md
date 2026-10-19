@@ -25,8 +25,14 @@ tsconfig, commitlint, lint-staged, CI y deploy por SSH.
 **Configs.** Una sola dependencia, en `packages/config/package.json`:
 
 ```json
-"dependencies": { "@sofly/kit": "github:SoflyOrg/sofly-kit#semver:^1.0.0" }
+"dependencies": {
+  "@sofly/kit": "https://codeload.github.com/SoflyOrg/sofly-kit/tar.gz/refs/tags/v1.0.0"
+}
 ```
+
+Es el tarball del tag, no `github:...#semver:`: `pnpm deploy` (el que arma las
+imágenes de Docker) vuelve a resolver sin lockfile, y con semver necesita
+`git`, que la imagen no tiene. El tarball se baja sin git y sin token.
 
 Los archivos de `packages/config` quedan de una línea, con lo propio del repo:
 
@@ -76,9 +82,10 @@ el mismo grupo se trabarían.
   crea el tag `vX.Y.Z` y mueve el tag mayor (`v1`).
 - **Workflows** (`@v1`): los sistemas toman la versión nueva en su próxima
   corrida, sin tocar nada.
-- **Configs** (`semver:^1.0.0`): el lockfile de cada sistema fija el commit, a
+- **Configs** (tarball de un tag fijo): cada sistema queda en una versión, a
   propósito, para que un cambio del kit no rompa un deploy sin que nadie lo
   pruebe. Para tomarlo, `bash sofly-standards/scripts/actualizar-kit.sh`
-  actualiza el kit en todos los sistemas y corre su check.
+  (está en el repo privado) pasa todos los sistemas al último tag de la misma
+  versión mayor y corre su check.
 - Un cambio que rompe (una regla nueva que da errores en algún sistema) es
   versión mayor: `v2`. Cada sistema la adopta cuando está listo.
