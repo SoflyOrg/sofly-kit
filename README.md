@@ -16,8 +16,9 @@ tsconfig, commitlint, lint-staged, CI y deploy por SSH.
 | `@sofly/kit/prettier` | default: los valores fijos de SOFLY. `prettierConfig({ jsxSingleQuote, tailwindStylesheet })` para lo propio de cada repo. El plugin de Tailwind viene adentro. |
 | `@sofly/kit/tsconfig/*.json` | `base`, `next`, `node`, `react` (familia full) y `baseline`. |
 | `@sofly/kit/commitlint` | conventional commits, sin tope de largo en cuerpo y pie. |
-| `@sofly/kit/lint-staged` | ESLint sobre `.ts/.tsx` de `apps/` y `packages/` + Prettier sobre todo, en orden. |
-| `.github/workflows/ci.yml` | CI reutilizable: verify (format, lint, typecheck, test, build) + E2E opcional, con Postgres/Redis opcionales. |
+| `@sofly/kit/eslint` → `nestInputs` | Opt-in para `apps/api` (Nest): `@Body/@Query/@Param` tipados `unknown` o con pipe. `[...baseline(), ...nestInputs]`. |
+| `@sofly/kit/lint-staged` | Corta el commit si entra un `.env`, comprimido, planilla, volcado o llave (`bin/forbidden-files.js`; excepciones del repo en `.sofly-allowed-files`), después ESLint sobre `.ts/.tsx` de `apps/` y `packages/` + Prettier sobre todo, en orden. |
+| `.github/workflows/ci.yml` | CI reutilizable: `secrets` (gitleaks fijado con checksum + archivos prohibidos, sólo sobre los commits nuevos; `secret-scan: false` lo apaga), verify (format, lint, typecheck, test, build) + E2E opcional, con Postgres/Redis opcionales. Una key pública a propósito lleva `// gitleaks:allow` en su línea. |
 | `.github/workflows/deploy-vps.yml` | Deploy reutilizable: SSH al VPS, `git pull --ff-only` y el script de deploy del sistema. |
 
 ## Cómo lo usa un sistema

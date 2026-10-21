@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /**
  * lint-staged de SOFLY para monorepos pnpm + turbo.
@@ -9,9 +10,15 @@ import path from 'node:path'
  *    use la config de su paquete (ESLint 9 flat en monorepo).
  *  - Prettier sobre todo lo que entiende (`--ignore-unknown`).
  *
- * Un solo glob con función, así los comandos corren en orden (primero ESLint,
- * después Prettier) y nunca dos herramientas escriben el mismo archivo a la vez.
+ *  - Antes que nada, `bin/forbidden-files.js`: corta el commit si entra un
+ *    `.env`, un comprimido, una planilla, un volcado o una llave.
+ *
+ * Un solo glob con función, así los comandos corren en orden (primero el
+ * chequeo de archivos, después ESLint y Prettier) y nunca dos herramientas
+ * escriben el mismo archivo a la vez.
  */
+const forbiddenFiles = fileURLToPath(new URL('./bin/forbidden-files.js', import.meta.url))
+
 const quote = files => files.map(f => JSON.stringify(f)).join(' ')
 
 const lintable = file => {
@@ -21,7 +28,7 @@ const lintable = file => {
 
 export default {
 	'*': files => {
-		const commands = []
+		const commands = [`node ${JSON.stringify(forbiddenFiles)} ${quote(files)}`]
 		const toLint = files.filter(lintable)
 		if (toLint.length > 0) {
 			commands.push(

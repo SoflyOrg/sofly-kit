@@ -5,7 +5,8 @@
 #       uses: SoflyOrg/sofly-kit/.github/workflows/ci.yml@v1
 #       with: { ... }
 #
-# Corre `verify` (format, lint, typecheck, test, build) y, si se pide, `e2e`.
+# Corre `secrets` (gitleaks + archivos prohibidos sobre los commits nuevos),
+# `verify` (format, lint, typecheck, test, build) y, si se pide, `e2e`.
 # Lo propio de cada sistema entra por inputs: runner, base de datos, env,
 # migraciones, chequeos extra y los pasos de E2E.
 #
@@ -74,6 +75,10 @@ on:
         description: Carpeta del reporte de Playwright a subir como artifact.
         type: string
         default: playwright-report
+      secret-scan:
+        description: Busca secretos y archivos prohibidos en los commits nuevos del push o la PR.
+        type: boolean
+        default: true
 
 # En una PR, un push nuevo cancela la corrida vieja. En main no: cortar un CI a
 # la mitad lo hace empezar de cero y demora el deploy.
@@ -82,6 +87,65 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Sólo mira los commits que trae este push o PR, no el historial: lo viejo se
+  # limpia aparte (con la rotación) y no tiene que frenar cada deploy.
+  secrets:
+    name: Secretos y archivos prohibidos
+    if: ${{ inputs.secret-scan }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          repository: SoflyOrg/sofly-kit
+          ref: v1
+          path: .sofly-kit
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Rango de commits
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            from="$PR_BASE"; to="$PR_HEAD"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            from="$BEFORE"; to="$SHA"
+          else
+            # Rama nueva o push forzado: sólo el último commit.
+            from="$SHA~1"; to="$SHA"
+          fi
+          echo "RANGE=$from..$to" >> "$GITHUB_ENV"
+          echo "Rango: $from..$to"
+
+      - name: Instalar gitleaks (versión y checksum fijos)
+        run: |
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/gl.tgz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $dir/gl.tgz" | sha256sum -c -
+          tar -xzf "$dir/gl.tgz" -C "$dir" gitleaks
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Gitleaks
+        run: gitleaks git --log-opts="$RANGE" --redact --no-banner --max-archive-depth 2 --exit-code 1 .
+
+      - name: Archivos prohibidos
+        run: |
+          git diff --name-only --diff-filter=AR -z "$RANGE" | xargs -0 -r node .sofly-kit/bin/forbidden-files.js
+
   verify:
     name: Lint, typecheck, test, build
     runs-on: ${{ fromJSON(inputs.runs-on) }}

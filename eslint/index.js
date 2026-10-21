@@ -164,6 +164,38 @@ function fullReact(options) {
 export const full = { base: fullBase, next: fullNext, react: fullReact }
 
 /**
+ * Opt-in para APIs NestJS (`apps/api`): lo que entra por `@Body`, `@Query` y
+ * `@Param` se tipa `unknown` hasta parsearlo con zod, o lleva un pipe que lo
+ * valide (`@Body(new ZodValidationPipe(schema))`, `@Param('id', UuidPipe)`).
+ * Un `@Param('id') id: string` es un tipo que miente: nadie lo validó.
+ * Ver `sofly-standards/estandares/seguridad.md` §0.7.
+ *
+ * Uso: `export default [...baseline(), ...nestInputs]` en `apps/api`.
+ */
+// `:has(> …)` relativo no matchea en el esquery de ESLint 9: se busca en todo
+// el subárbol del parámetro (decoradores + tipo), que es chico.
+const untrustedInput =
+	'Identifier[decorators.length>0]' +
+	':has(Decorator > CallExpression[callee.name=/^(Body|Query|Param)$/][arguments.length<2])' +
+	':not(:has(NewExpression))' +
+	':not(:has(TSTypeAnnotation > TSUnknownKeyword))'
+export const nestInputs = [
+	{
+		files: ['**/*.ts'],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				{
+					selector: untrustedInput,
+					message:
+						'Lo que llega del cliente es `unknown` hasta parsearlo con zod (o va con un pipe que lo valide). Ver seguridad.md §0.7.'
+				}
+			]
+		}
+	}
+]
+
+/**
  * Familia `baseline`. Cada sistema le suma encima lo propio (por ejemplo, el
  * plugin de Next en `apps/web`) desde el `eslint.config` de cada paquete.
  */
