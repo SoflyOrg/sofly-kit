@@ -64,7 +64,7 @@ jobs:
   ci:
     uses: SoflyOrg/sofly-kit/.github/workflows/ci.yml@v1
     with:
-      runs-on: '["self-hosted","sofly-vps"]'
+      runs-on: '"ubuntu-latest"'
       database: true
       db-user: rr
       db-name: reina-reech
