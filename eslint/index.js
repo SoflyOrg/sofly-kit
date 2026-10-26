@@ -112,7 +112,7 @@ function fullNext(options) {
 		{
 			// Service worker de la PWA: corre en un worker, sus globales son
 			// `self`, `caches` y `clients`, que el entorno de browser no conoce.
-			files: ['public/sw.js'],
+			files: ['public/sw.js', 'public/*-sw.js'],
 			languageOptions: {
 				globals: {
 					self: 'readonly',
@@ -139,6 +139,10 @@ function fullNext(options) {
 				'src/app/**/sitemap.ts',
 				'src/app/**/robots.ts',
 				'src/app/**/manifest.ts',
+				'src/app/**/opengraph-image.tsx',
+				'src/app/**/twitter-image.tsx',
+				'src/app/**/icon.tsx',
+				'src/app/**/apple-icon.tsx',
 				'src/middleware.ts',
 				'src/i18n/request.ts',
 				'e2e/globalSetup.ts'
