@@ -20,6 +20,7 @@ tsconfig, commitlint, lint-staged, CI y deploy por SSH.
 | `@sofly/kit/lint-staged` | Corta el commit si entra un `.env`, comprimido, planilla, volcado o llave (`bin/forbidden-files.js`; excepciones del repo en `.sofly-allowed-files`), después ESLint sobre `.ts/.tsx` de `apps/` y `packages/` + Prettier sobre todo, en orden. |
 | `.github/workflows/ci.yml` | CI reutilizable: `secrets` (gitleaks fijado con checksum + archivos prohibidos, sólo sobre los commits nuevos; `secret-scan: false` lo apaga), verify (format, lint, typecheck, test, build) + E2E opcional, con Postgres/Redis opcionales. Una key pública a propósito lleva `// gitleaks:allow` en su línea. Un falso positivo ya commiteado (un fixture de test) no se arregla con otro commit, porque el escaneo mira cada commit del push: su huella va a `.gitleaksignore` en la raíz, y el valor se cambia por uno que no parezca una key (`'test-only-'.padEnd(32, 'x')`). |
 | `.github/workflows/deploy-vps.yml` | Deploy reutilizable: SSH al VPS, `git pull --ff-only` y el script de deploy del sistema. |
+| `.github/workflows/deploy-netlify.yml` | Deploy reutilizable a Netlify: build en el runner con las variables del sitio y `netlify deploy --prod`. Para repos privados de SoflyOrg, que el plan gratis de Netlify no deja conectar directo. |
 
 ## Cómo lo usa un sistema
 
@@ -74,7 +75,7 @@ jobs:
 No declares `concurrency` en el que llama: el reutilizable ya la tiene y con
 el mismo grupo se trabarían.
 
-**Deploy.** Ver la cabecera de `.github/workflows/deploy-vps.yml`.
+**Deploy.** Ver la cabecera de `.github/workflows/deploy-vps.yml` (VPS) o de `.github/workflows/deploy-netlify.yml` (Netlify).
 
 ## Versiones
 

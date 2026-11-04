@@ -1,0 +1,78 @@
+# Deploy de SOFLY a Netlify desde GitHub Actions: build en el runner con las
+# variables del sitio de Netlify y `netlify deploy --prod`. Sirve para repos
+# privados de una organización, que el plan gratis de Netlify no deja
+# conectar directo (pide Pro). Lo llama el `deploy.yml` de cada sistema cuando
+# su CI terminó en verde en main:
+#
+#   on:
+#     workflow_run: { workflows: [CI], types: [completed], branches: [main] }
+#   jobs:
+#     deploy:
+#       if: ${{ github.event.workflow_run.conclusion == 'success' }}
+#       uses: SoflyOrg/sofly-kit/.github/workflows/deploy-netlify.yml@v1
+#       with: { site-id: <id del sitio>, filter: '@atl/web' }
+#       secrets:
+#         NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+#
+# El token es un personal access token de Netlify del dueño del sitio. Los
+# secrets van explícitos: `secrets: inherit` no cruza de organización.
+name: Deploy Netlify (sofly-kit)
+
+on:
+  workflow_call:
+    inputs:
+      site-id:
+        description: Project ID del sitio en Netlify (no es secreto).
+        type: string
+        required: true
+      filter:
+        description: Paquete del monorepo a deployar (`--filter`); vacío si el repo no es monorepo.
+        type: string
+        default: ''
+      ref:
+        description: Commit a deployar. Por defecto, el que pasó el CI.
+        type: string
+        default: ''
+    secrets:
+      NETLIFY_AUTH_TOKEN:
+        required: true
+
+# Un deploy a la vez; si entra otro push, el viejo se descarta: siempre gana
+# el último main.
+concurrency:
+  group: deploy-netlify-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Netlify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
+
+      # Sin `version`: la toma de `packageManager` del package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `--build` corre el build del netlify.toml con las variables del sitio
+      # (las de Netlify, no hace falta copiarlas a GitHub). Siempre desde la
+      # raíz: en un monorepo, desde el paquete no sube el middleware.
+      - name: Build y deploy
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ inputs.site-id }}
+          KIT_FILTER: ${{ inputs.filter }}
+        run: |
+          set -e
+          args=(deploy --build --prod --message "${GITHUB_SHA::7} $(git log -1 --format=%s)")
+          if [ -n "$KIT_FILTER" ]; then args+=(--filter "$KIT_FILTER"); fi
+          npx -y netlify-cli@27.13.0 "${args[@]}"
