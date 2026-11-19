@@ -180,6 +180,13 @@ jobs:
         run: |
           git diff --name-only --diff-filter=AR -z "$RANGE" | xargs -0 -r node .sofly-kit/bin/forbidden-files.js
 
+      # El kit se baja adentro del repo (checkout no deja otra) y ya cumplió:
+      # si queda, `prettier --check .` lo toma como código del sistema y el
+      # format falla por archivos que no son del repo.
+      - name: Sacar el kit del árbol
+        if: ${{ inputs.secret-scan }}
+        run: rm -rf .sofly-kit
+
       # En los runners de GitHub cada corrida arranca de cero: sin esto, un
       # cambio en la web vuelve a testear y buildear todos los paquetes.
       - name: Caché de turbo
