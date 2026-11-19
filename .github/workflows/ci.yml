@@ -5,8 +5,11 @@
 #       uses: SoflyOrg/sofly-kit/.github/workflows/ci.yml@v1
 #       with: { ... }
 #
-# Corre `secrets` (gitleaks + archivos prohibidos sobre los commits nuevos),
-# `verify` (format, lint, typecheck, test, build) y, si se pide, `e2e`.
+# Corre todo en un solo job `verify`: secretos (gitleaks + archivos prohibidos
+# sobre los commits nuevos), format, lint, typecheck, test, build y, si se
+# pide, E2E. Un solo job a propósito: los repos son privados y cada job aparte
+# paga de nuevo el arranque, el install y el build, y GitHub redondea cada job
+# al minuto (ver sofly-standards/infra/minutos-de-actions.md).
 # Lo propio de cada sistema entra por inputs: runner, base de datos, env,
 # migraciones, chequeos extra y los pasos de E2E.
 #
@@ -52,11 +55,11 @@ on:
         type: boolean
         default: false
       turbo-cache:
-        description: Caché de turbo fuera del checkout (sólo sirve en el runner self-hosted).
+        description: Caché de turbo fuera del checkout (sólo sirve en el runner self-hosted). En los runners de GitHub la caché viaja con actions/cache.
         type: boolean
         default: false
       e2e:
-        description: Corre el job de E2E después de `verify`.
+        description: Corre los E2E al final de `verify`, en el mismo job (reusa el install y el build).
         type: boolean
         default: false
       e2e-env:
@@ -87,68 +90,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Sólo mira los commits que trae este push o PR, no el historial: lo viejo se
-  # limpia aparte (con la rotación) y no tiene que frenar cada deploy.
-  secrets:
-    name: Secretos y archivos prohibidos
-    if: ${{ inputs.secret-scan }}
+  verify:
+    name: Lint, typecheck, test, build
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     env:
       GITLEAKS_VERSION: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/checkout@v4
-        with:
-          repository: SoflyOrg/sofly-kit
-          ref: v1
-          path: .sofly-kit
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Rango de commits
-        env:
-          EVENT: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          BEFORE: ${{ github.event.before }}
-          SHA: ${{ github.sha }}
-        run: |
-          if [ "$EVENT" = "pull_request" ]; then
-            from="$PR_BASE"; to="$PR_HEAD"
-          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            from="$BEFORE"; to="$SHA"
-          else
-            # Rama nueva o push forzado: sólo el último commit.
-            from="$SHA~1"; to="$SHA"
-          fi
-          echo "RANGE=$from..$to" >> "$GITHUB_ENV"
-          echo "Rango: $from..$to"
-
-      - name: Instalar gitleaks (versión y checksum fijos)
-        run: |
-          dir="$RUNNER_TEMP/gitleaks"
-          mkdir -p "$dir"
-          curl -fsSL -o "$dir/gl.tgz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          echo "${GITLEAKS_SHA256}  $dir/gl.tgz" | sha256sum -c -
-          tar -xzf "$dir/gl.tgz" -C "$dir" gitleaks
-          echo "$dir" >> "$GITHUB_PATH"
-
-      - name: Gitleaks
-        run: gitleaks git --log-opts="$RANGE" --redact --no-banner --max-archive-depth 2 --exit-code 1 .
-
-      - name: Archivos prohibidos
-        run: |
-          git diff --name-only --diff-filter=AR -z "$RANGE" | xargs -0 -r node .sofly-kit/bin/forbidden-files.js
-
-  verify:
-    name: Lint, typecheck, test, build
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
 
     # Con `database: false` la imagen queda vacía y el servicio no arranca.
     services:
@@ -170,7 +117,11 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
 
     steps:
+      # El escaneo de secretos necesita el historial para armar el rango de
+      # commits ('0' como texto: el 0 número es falso en las expresiones).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.secret-scan && '0' || '1' }}
 
       # Sin `version`: la toma de `packageManager` del package.json.
       - uses: pnpm/action-setup@v4
@@ -179,6 +130,65 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+
+      # Secretos antes de instalar nada: si hay uno, corta ahí. Sólo mira los
+      # commits que trae este push o PR, no el historial: lo viejo se limpia
+      # aparte (con la rotación) y no tiene que frenar cada deploy.
+      - uses: actions/checkout@v4
+        if: ${{ inputs.secret-scan }}
+        with:
+          repository: SoflyOrg/sofly-kit
+          ref: v1
+          path: .sofly-kit
+
+      - name: Rango de commits
+        if: ${{ inputs.secret-scan }}
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            from="$PR_BASE"; to="$PR_HEAD"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            from="$BEFORE"; to="$SHA"
+          else
+            # Rama nueva o push forzado: sólo el último commit.
+            from="$SHA~1"; to="$SHA"
+          fi
+          echo "RANGE=$from..$to" >> "$GITHUB_ENV"
+          echo "Rango: $from..$to"
+
+      - name: Instalar gitleaks (versión y checksum fijos)
+        if: ${{ inputs.secret-scan }}
+        run: |
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/gl.tgz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $dir/gl.tgz" | sha256sum -c -
+          tar -xzf "$dir/gl.tgz" -C "$dir" gitleaks
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Gitleaks
+        if: ${{ inputs.secret-scan }}
+        run: gitleaks git --log-opts="$RANGE" --redact --no-banner --max-archive-depth 2 --exit-code 1 .
+
+      - name: Archivos prohibidos
+        if: ${{ inputs.secret-scan }}
+        run: |
+          git diff --name-only --diff-filter=AR -z "$RANGE" | xargs -0 -r node .sofly-kit/bin/forbidden-files.js
+
+      # En los runners de GitHub cada corrida arranca de cero: sin esto, un
+      # cambio en la web vuelve a testear y buildear todos los paquetes.
+      - name: Caché de turbo
+        if: ${{ !inputs.turbo-cache }}
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: turbo-${{ runner.os }}-
 
       - name: Variables del sistema
         env:
@@ -224,76 +234,39 @@ jobs:
         if: ${{ inputs.audit }}
         run: pnpm audit --audit-level high || true
 
-      # La caché de turbo no tiene tope propio: se borra lo que no se usó en una
-      # semana para que no crezca sin fin en el disco del VPS.
-      - name: Limpiar caché de turbo vieja
-        if: ${{ inputs.turbo-cache }}
-        run: find "$TURBO_CACHE_DIR" -type f -mtime +7 -delete 2>/dev/null || true
-
-  e2e:
-    name: E2E (Playwright)
-    if: ${{ inputs.e2e }}
-    needs: verify
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-
-    services:
-      postgres:
-        image: ${{ inputs.database && 'postgres:16-alpine' || '' }}
+      # E2E en el mismo job: reusa el install y el build (el `pnpm build` del
+      # setup sale de la caché de turbo) en vez de pagarlos dos veces.
+      - name: Variables de E2E
+        if: ${{ inputs.e2e }}
         env:
-          POSTGRES_USER: ${{ inputs.db-user }}
-          POSTGRES_PASSWORD: ${{ inputs.db-password }}
-          POSTGRES_DB: ${{ inputs.db-name }}
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U ${{ inputs.db-user }}"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      redis:
-        image: ${{ inputs.database && 'redis:7-alpine' || '' }}
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Variables del sistema
-        env:
-          KIT_ENV: ${{ inputs.env }}
           KIT_E2E_ENV: ${{ inputs.e2e-env }}
-          KIT_TURBO_CACHE: ${{ inputs.turbo-cache }}
         run: |
           node -e '
-            const env = { ...JSON.parse(process.env.KIT_ENV || "{}"), ...JSON.parse(process.env.KIT_E2E_ENV || "{}"), CI: "true" }
-            if (process.env.KIT_TURBO_CACHE === "true") {
-              env.TURBO_CACHE_DIR = require("node:path").resolve(process.env.GITHUB_WORKSPACE, "..", ".turbo-cache")
-            }
+            const env = { ...JSON.parse(process.env.KIT_E2E_ENV || "{}"), CI: "true" }
             const lines = Object.entries(env).map(([k, v]) => k + "=" + v)
             require("node:fs").appendFileSync(process.env.GITHUB_ENV, lines.join("\n") + "\n")
           '
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
       - name: Preparar E2E
-        if: ${{ inputs.e2e-setup != '' }}
+        if: ${{ inputs.e2e && inputs.e2e-setup != '' }}
         run: ${{ inputs.e2e-setup }}
 
       - name: Run E2E tests
+        if: ${{ inputs.e2e }}
         run: ${{ inputs.e2e-command }}
 
       - name: Upload Playwright report
-        if: ${{ !cancelled() }}
+        if: ${{ inputs.e2e && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: ${{ inputs.e2e-report }}
           retention-days: 7
           if-no-files-found: ignore
+
+      # Ninguna caché de turbo tiene tope propio: se borra lo que no se usó en
+      # una semana para que no crezca sin fin (en el disco del VPS o en la
+      # caché de Actions, que guarda la carpeta entera en cada corrida).
+      - name: Limpiar caché de turbo vieja
+        if: ${{ !cancelled() }}
+        run: find "${TURBO_CACHE_DIR:-.turbo/cache}" -type f -mtime +7 -delete 2>/dev/null || true

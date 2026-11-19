@@ -16,6 +16,12 @@
 #
 # Los secrets van explícitos: `secrets: inherit` no cruza de organización y
 # varios sistemas viven en cuentas personales.
+#
+# Con `detach: true` el job hace el pull, deja el deploy corriendo en el VPS
+# y termina en segundos: GitHub cobra cada minuto que el runner espera por SSH
+# un build que pasa en el VPS (había deploys de 30 a 45 minutos). El
+# resultado queda en el VPS (`~/.deploys/<carpeta>.log` y `.status`) y el job
+# siguiente avisa con un ::error:: si el deploy anterior falló.
 name: Deploy VPS (sofly-kit)
 
 on:
@@ -33,6 +39,10 @@ on:
         description: Un build sin caché (después del prune semanal) pasa los 30 minutos.
         type: string
         default: 60m
+      detach:
+        description: Deja el deploy corriendo en el VPS y no espera a que termine (ver arriba).
+        type: boolean
+        default: false
     secrets:
       VPS_HOST:
         required: true
@@ -62,5 +72,33 @@ jobs:
           script: |
             set -e
             cd ${{ inputs.path }}
-            git pull --ff-only
-            ${{ inputs.command }}
+            if [ "${{ inputs.detach }}" != "true" ]; then
+              git pull --ff-only
+              ${{ inputs.command }}
+              exit 0
+            fi
+            name="$(basename "$PWD")"
+            dir="$HOME/.deploys"
+            mkdir -p "$dir"
+            # Cómo terminó el deploy anterior (el que soltó el push previo).
+            if [ -f "$dir/$name.status" ]; then
+              prev="$(cat "$dir/$name.status")"
+              echo "Deploy anterior: $prev"
+              case "$prev" in
+                fail*) echo "::error::El deploy anterior falló. Últimas líneas de $dir/$name.log:"; tail -n 40 "$dir/$name.log" || true ;;
+              esac
+            fi
+            # El pull se hace adentro del candado: si entra un push mientras
+            # buildea otro, espera y deploya el main más nuevo.
+            log="$dir/$name.log"
+            if [ -f "$log" ] && [ "$(wc -c < "$log")" -gt 2000000 ]; then : > "$log"; fi
+            nohup setsid flock "$dir/$name.lock" bash -c '
+              echo "=== deploy $(date -u +%FT%TZ)"
+              echo "running $(date -u +%FT%TZ)" > "$1/$2.status"
+              if git pull --ff-only && eval "$3"; then
+                echo "ok $(date -u +%FT%TZ) $(git rev-parse --short HEAD)" > "$1/$2.status"
+              else
+                echo "fail $(date -u +%FT%TZ) $(git rev-parse --short HEAD)" > "$1/$2.status"
+              fi
+            ' _ "$dir" "$name" "${{ inputs.command }}" >> "$log" 2>&1 < /dev/null &
+            echo "Deploy lanzado en el VPS: log en $log"
